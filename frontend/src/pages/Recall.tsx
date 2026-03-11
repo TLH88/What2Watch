@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import VoiceMicButton from '../components/VoiceMicButton'
 
 interface Clues {
   media_type: string | null
@@ -159,14 +160,21 @@ export default function Recall({ onBack }: RecallProps) {
             <p className="text-gray-400 text-sm">
               Describe everything you remember — actors, plot, scenes, era, anything helps.
             </p>
-            <textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="I remember this movie from the 90s where there was a guy who..."
-              rows={4}
-              className="w-full bg-gray-900 text-white rounded-xl px-4 py-3 outline-none focus:ring-2 ring-violet-500 resize-none"
-              autoFocus
-            />
+            <div className="relative">
+              <textarea
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="I remember this movie from the 90s where there was a guy who..."
+                rows={4}
+                className="w-full bg-gray-900 text-white rounded-xl px-4 py-3 pr-14 outline-none focus:ring-2 ring-violet-500 resize-none"
+                autoFocus
+              />
+              <VoiceMicButton
+                onTranscript={(text) => setDescription(text)}
+                disabled={loading}
+                className="absolute right-2 bottom-2 w-10 h-10"
+              />
+            </div>
             <button
               onClick={handleStart}
               disabled={loading || !description.trim()}

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useUser } from '../context/UserContext'
 import ResultCard from '../components/ResultCard'
+import VoiceMicButton from '../components/VoiceMicButton'
 
 interface Question {
   question: string
@@ -149,15 +150,20 @@ export default function Discover({ initialType, onBack }: DiscoverProps) {
         {/* Search input */}
         {!results.length && !question && (
           <>
-            <div>
+            <div className="flex gap-2">
               <input
                 type="text"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="What are you in the mood for?"
-                className="w-full bg-gray-900 text-white rounded-xl px-4 py-3 outline-none focus:ring-2 ring-violet-500"
+                className="flex-1 bg-gray-900 text-white rounded-xl px-4 py-3 outline-none focus:ring-2 ring-violet-500"
                 onKeyDown={(e) => e.key === 'Enter' && handleStart()}
                 autoFocus
+              />
+              <VoiceMicButton
+                onTranscript={(text) => setQuery(text)}
+                disabled={loading}
+                className="w-12 h-12 flex-shrink-0"
               />
             </div>
 
