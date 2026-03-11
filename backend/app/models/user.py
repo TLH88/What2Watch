@@ -35,6 +35,7 @@ class User(Base):
     feedback: Mapped[list["UserFeedback"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     watch_history: Mapped[list["UserWatchHistory"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     watchlist: Mapped[list["UserWatchlistItem"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    pending_ratings: Mapped[list["PendingRating"]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
 
 class UserPreferences(Base):
@@ -101,3 +102,20 @@ class UserWatchlistItem(Base):
     added_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     user: Mapped["User"] = relationship(back_populates="watchlist")
+
+
+class PendingRating(Base):
+    __tablename__ = "pending_ratings"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    title_id: Mapped[int] = mapped_column(ForeignKey("titles.id", ondelete="CASCADE"), index=True)
+    tmdb_id: Mapped[int] = mapped_column(Integer)
+    media_type: Mapped[str] = mapped_column(String(10))
+    title_name: Mapped[str] = mapped_column(String(500))
+    poster_path: Mapped[str | None] = mapped_column(String(500))
+    dismissed: Mapped[bool] = mapped_column(Boolean, default=False)
+    rated: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    user: Mapped["User"] = relationship(back_populates="pending_ratings")

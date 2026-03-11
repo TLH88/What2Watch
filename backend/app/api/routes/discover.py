@@ -9,9 +9,9 @@ from app.schemas.discover import (
     DiscoverStartRequest,
 )
 from app.services.discover_service import respond_discover, start_discover
-from app.models.user import UserFeedback, UserWatchHistory, UserWatchlistItem
+from app.models.user import PendingRating, UserFeedback, UserWatchHistory, UserWatchlistItem
 from app.models.title import Title
-from sqlalchemy import select
+from sqlalchemy import select, and_
 
 router = APIRouter()
 
@@ -70,6 +70,24 @@ async def discover_feedback(
             source="manual",
         )
         db.add(entry)
+        # Create pending rating reminder (if not already existing)
+        existing = await db.execute(
+            select(PendingRating).where(
+                and_(
+                    PendingRating.user_id == user_id,
+                    PendingRating.tmdb_id == data.tmdb_id,
+                )
+            )
+        )
+        if not existing.scalar_one_or_none():
+            db.add(PendingRating(
+                user_id=user_id,
+                title_id=title.id,
+                tmdb_id=title.tmdb_id,
+                media_type=title.media_type,
+                title_name=title.title,
+                poster_path=title.poster_path,
+            ))
 
     await db.commit()
     return {"status": "ok"}

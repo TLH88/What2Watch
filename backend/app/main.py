@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.api.routes import discover, health, integrations, recall, titles, users
+from app.api.routes import discover, health, integrations, recall, reminders, titles, users
 
 app = FastAPI(
     title="What2Watch",
@@ -25,3 +25,4 @@ app.include_router(integrations.router, prefix="/api")
 app.include_router(users.router, prefix="/api")
 app.include_router(discover.router, prefix="/api")
 app.include_router(recall.router, prefix="/api")
+app.include_router(reminders.router, prefix="/api")

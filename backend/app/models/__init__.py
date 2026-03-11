@@ -8,6 +8,7 @@ from app.models.title import (
     TitleWatchProvider,
 )
 from app.models.user import (
+    PendingRating,
     User,
     UserFeedback,
     UserGenrePreference,
@@ -17,6 +18,7 @@ from app.models.user import (
 )
 
 __all__ = [
+    "PendingRating",
     "Title",
     "TitleExternalId",
     "TitleGenre",
