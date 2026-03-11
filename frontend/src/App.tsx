@@ -4,8 +4,10 @@ import ChooseUser from './pages/ChooseUser'
 import Home from './pages/Home'
 import Discover from './pages/Discover'
 import Recall from './pages/Recall'
+import Admin from './pages/Admin'
+import ErrorBoundary from './components/ErrorBoundary'
 
-type Page = { name: 'home' } | { name: 'discover'; type?: string } | { name: 'recall' }
+type Page = { name: 'home' } | { name: 'discover'; type?: string } | { name: 'recall' } | { name: 'admin' }
 
 function AppContent() {
   const { currentUser } = useUser()
@@ -25,6 +27,8 @@ function AppContent() {
       )
     case 'recall':
       return <Recall onBack={() => setPage({ name: 'home' })} />
+    case 'admin':
+      return <Admin onBack={() => setPage({ name: 'home' })} />
     default:
       return <Home onNavigate={(p: string, type?: string) => setPage({ name: p as any, type })} />
   }
@@ -32,9 +36,11 @@ function AppContent() {
 
 function App() {
   return (
-    <UserProvider>
-      <AppContent />
-    </UserProvider>
+    <ErrorBoundary>
+      <UserProvider>
+        <AppContent />
+      </UserProvider>
+    </ErrorBoundary>
   )
 }
 

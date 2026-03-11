@@ -53,15 +53,25 @@ export default function Home({ onNavigate }: HomeProps) {
       {/* Header */}
       <header className="flex items-center justify-between px-4 py-4 border-b border-gray-800">
         <h1 className="text-xl font-bold">What2Watch</h1>
-        <button
-          onClick={switchUser}
-          className="flex items-center gap-2 text-sm text-gray-400 hover:text-white transition-colors"
-        >
-          <div className="w-8 h-8 rounded-full bg-violet-600 flex items-center justify-center text-xs font-bold">
-            {currentUser.display_name.charAt(0).toUpperCase()}
-          </div>
-          Switch
-        </button>
+        <div className="flex items-center gap-3">
+          {currentUser.is_admin && (
+            <button
+              onClick={() => onNavigate('admin')}
+              className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
+            >
+              Admin
+            </button>
+          )}
+          <button
+            onClick={switchUser}
+            className="flex items-center gap-2 text-sm text-gray-400 hover:text-white transition-colors"
+          >
+            <div className="w-8 h-8 rounded-full bg-violet-600 flex items-center justify-center text-xs font-bold">
+              {currentUser.display_name.charAt(0).toUpperCase()}
+            </div>
+            Switch
+          </button>
+        </div>
       </header>
 
       {/* Main */}

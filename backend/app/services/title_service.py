@@ -44,11 +44,11 @@ async def get_title_by_tmdb_id(db: AsyncSession, tmdb_id: int) -> Title | None:
 
 
 async def fetch_and_store_title(
-    db: AsyncSession, tmdb_id: int, media_type: str
+    db: AsyncSession, tmdb_id: int, media_type: str, force_refresh: bool = False,
 ) -> Title:
     """Fetch full title details from TMDB and persist to database."""
     existing = await get_title_by_tmdb_id(db, tmdb_id)
-    if existing:
+    if existing and not force_refresh:
         return existing
 
     if media_type == "movie":
@@ -67,6 +67,14 @@ async def fetch_and_store_title(
             title_data["release_date"] = None
     else:
         title_data["release_date"] = rd
+
+    if existing and force_refresh:
+        # Update existing title fields
+        for key, value in title_data.items():
+            if key != "tmdb_id":
+                setattr(existing, key, value)
+        await db.commit()
+        return await get_title_by_tmdb_id(db, tmdb_id)
 
     title = Title(**title_data)
 
