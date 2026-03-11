@@ -1,13 +1,17 @@
 import { useUser } from '../context/UserContext'
 
 const actions = [
-  { label: 'Find a Movie', icon: '🎬', path: '/discover?type=movie' },
-  { label: 'Find a TV Show', icon: '📺', path: '/discover?type=tv' },
-  { label: 'Find Something for Us', icon: '👥', path: '/discover?type=group' },
-  { label: 'Help Me Remember a Title', icon: '🤔', path: '/recall' },
+  { label: 'Find a Movie', icon: '🎬', page: 'discover', type: 'movie' },
+  { label: 'Find a TV Show', icon: '📺', page: 'discover', type: 'tv' },
+  { label: 'Find Something for Us', icon: '👥', page: 'discover', type: 'group' },
+  { label: 'Help Me Remember a Title', icon: '🤔', page: 'recall', type: undefined },
 ]
 
-export default function Home() {
+interface HomeProps {
+  onNavigate: (page: string, type?: string) => void
+}
+
+export default function Home({ onNavigate }: HomeProps) {
   const { currentUser, switchUser } = useUser()
 
   if (!currentUser) return null
@@ -38,6 +42,7 @@ export default function Home() {
           {actions.map((action) => (
             <button
               key={action.label}
+              onClick={() => onNavigate(action.page, action.type)}
               className="flex items-center gap-4 bg-gray-900 hover:bg-gray-800 rounded-xl px-5 py-4 text-left transition-colors"
             >
               <span className="text-2xl">{action.icon}</span>
