@@ -3,8 +3,9 @@ import { UserProvider, useUser } from './context/UserContext'
 import ChooseUser from './pages/ChooseUser'
 import Home from './pages/Home'
 import Discover from './pages/Discover'
+import Recall from './pages/Recall'
 
-type Page = { name: 'home' } | { name: 'discover'; type?: string }
+type Page = { name: 'home' } | { name: 'discover'; type?: string } | { name: 'recall' }
 
 function AppContent() {
   const { currentUser } = useUser()
@@ -22,6 +23,8 @@ function AppContent() {
           onBack={() => setPage({ name: 'home' })}
         />
       )
+    case 'recall':
+      return <Recall onBack={() => setPage({ name: 'home' })} />
     default:
       return <Home onNavigate={(p: string, type?: string) => setPage({ name: p as any, type })} />
   }
