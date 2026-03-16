@@ -5,9 +5,17 @@ import Home from './pages/Home'
 import Discover from './pages/Discover'
 import Recall from './pages/Recall'
 import Admin from './pages/Admin'
+import Watchlist from './pages/Watchlist'
+import Profile from './pages/Profile'
 import ErrorBoundary from './components/ErrorBoundary'
 
-type Page = { name: 'home' } | { name: 'discover'; type?: string } | { name: 'recall' } | { name: 'admin' }
+type Page =
+  | { name: 'home' }
+  | { name: 'discover'; type?: string; query?: string; genres?: string[] }
+  | { name: 'recall'; query?: string }
+  | { name: 'admin' }
+  | { name: 'watchlist' }
+  | { name: 'profile' }
 
 function AppContent() {
   const { currentUser } = useUser()
@@ -22,15 +30,21 @@ function AppContent() {
       return (
         <Discover
           initialType={page.type}
+          initialQuery={page.query}
+          initialGenres={page.genres}
           onBack={() => setPage({ name: 'home' })}
         />
       )
     case 'recall':
-      return <Recall onBack={() => setPage({ name: 'home' })} />
+      return <Recall initialQuery={page.query} onBack={() => setPage({ name: 'home' })} />
     case 'admin':
       return <Admin onBack={() => setPage({ name: 'home' })} />
+    case 'watchlist':
+      return <Watchlist onBack={() => setPage({ name: 'home' })} />
+    case 'profile':
+      return <Profile onBack={() => setPage({ name: 'home' })} />
     default:
-      return <Home onNavigate={(p: string, type?: string) => setPage({ name: p as any, type })} />
+      return <Home onNavigate={(p: string, opts?: { type?: string; query?: string; genres?: string[] }) => setPage({ name: p as any, ...opts })} />
   }
 }
 

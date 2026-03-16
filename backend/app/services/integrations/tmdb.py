@@ -72,6 +72,9 @@ class TMDBClient:
             {"append_to_response": "credits,videos,watch/providers,external_ids,content_ratings"},
         )
 
+    async def get_collection(self, collection_id: int) -> dict:
+        return await self._get(f"/collection/{collection_id}")
+
     async def discover_movies(self, **filters) -> dict:
         return await self._get("/discover/movie", filters)
 
@@ -86,6 +89,10 @@ class TMDBClient:
 
     async def search_person(self, query: str) -> dict:
         return await self._get("/search/person", {"query": query})
+
+    async def search_keyword(self, query: str) -> dict:
+        """Search for TMDB keyword IDs (used with discover API's with_keywords)."""
+        return await self._get("/search/keyword", {"query": query})
 
     async def get_genre_list(self, media_type: str = "movie") -> dict:
         return await self._get(f"/genre/{media_type}/list")
@@ -156,26 +163,33 @@ def parse_genres(data: dict) -> list[dict]:
     return [{"genre_id": g["id"], "genre_name": g["name"]} for g in data.get("genres", [])]
 
 
+def _truncate(value: str | None, max_len: int) -> str | None:
+    """Truncate a string to fit database column limits."""
+    if value and len(value) > max_len:
+        return value[:max_len]
+    return value
+
+
 def parse_credits(data: dict, limit_cast: int = 10) -> list[dict]:
     people = []
     for i, member in enumerate(data.get("credits", {}).get("cast", [])[:limit_cast]):
         people.append({
             "tmdb_person_id": member["id"],
-            "name": member["name"],
+            "name": _truncate(member["name"], 255),
             "role": "cast",
-            "character": member.get("character"),
+            "character": _truncate(member.get("character"), 255),
             "order": member.get("order", i),
-            "profile_path": member.get("profile_path"),
+            "profile_path": _truncate(member.get("profile_path"), 255),
         })
     for member in data.get("credits", {}).get("crew", []):
         if member.get("job") in ("Director", "Creator"):
             people.append({
                 "tmdb_person_id": member["id"],
-                "name": member["name"],
+                "name": _truncate(member["name"], 255),
                 "role": "director",
                 "character": None,
                 "order": None,
-                "profile_path": member.get("profile_path"),
+                "profile_path": _truncate(member.get("profile_path"), 255),
             })
     return people
 
@@ -185,10 +199,10 @@ def parse_videos(data: dict) -> list[dict]:
     for v in data.get("videos", {}).get("results", []):
         if v.get("site") == "YouTube" and v.get("type") in ("Trailer", "Teaser", "Clip"):
             videos.append({
-                "key": v["key"],
+                "key": _truncate(v["key"], 255),
                 "site": v["site"],
                 "video_type": v["type"],
-                "name": v.get("name"),
+                "name": _truncate(v.get("name"), 255),
                 "official": v.get("official", False),
             })
     return videos

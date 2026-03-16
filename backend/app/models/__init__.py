@@ -8,6 +8,7 @@ from app.models.title import (
     TitleWatchProvider,
 )
 from app.models.user import (
+    LanguagePreference,
     PendingRating,
     User,
     UserFeedback,
@@ -18,6 +19,7 @@ from app.models.user import (
 )
 
 __all__ = [
+    "LanguagePreference",
     "PendingRating",
     "Title",
     "TitleExternalId",

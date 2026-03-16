@@ -39,9 +39,13 @@ class UserProfileOut(BaseModel):
     min_quality_threshold: float = 5.0
     preferred_runtime_max: int | None = None
     trakt_connected: bool = False
+    taste_profile: str | None = None
+    taste_profile_updated_at: str | None = None
     genre_preferences: list["GenrePreferenceOut"] = []
-    watch_history_count: int = 0
+    movies_watched: int = 0
+    shows_watched: int = 0
     watchlist_count: int = 0
+    feedback_count: int = 0
 
 
 class GenrePreferenceOut(BaseModel):

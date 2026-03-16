@@ -51,6 +51,9 @@ class UserPreferences(Base):
     trakt_connected: Mapped[bool] = mapped_column(Boolean, default=False)
     trakt_access_token: Mapped[str | None] = mapped_column(String(500))
     trakt_refresh_token: Mapped[str | None] = mapped_column(String(500))
+    taste_profile: Mapped[str | None] = mapped_column(Text)
+    taste_profile_raw: Mapped[str | None] = mapped_column(Text)
+    taste_profile_updated_at: Mapped[datetime | None] = mapped_column(DateTime)
 
     user: Mapped["User"] = relationship(back_populates="preferences")
 
@@ -102,6 +105,16 @@ class UserWatchlistItem(Base):
     added_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     user: Mapped["User"] = relationship(back_populates="watchlist")
+
+
+class LanguagePreference(Base):
+    __tablename__ = "language_preferences"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    language_code: Mapped[str] = mapped_column(String(10))  # ISO 639-1 (e.g. "en", "es", "fr")
+    language_name: Mapped[str] = mapped_column(String(100))  # Display name (e.g. "English")
+    priority: Mapped[int] = mapped_column(Integer, default=0)  # Order priority
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
 class PendingRating(Base):

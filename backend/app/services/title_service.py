@@ -99,7 +99,16 @@ async def fetch_and_store_title(
         title.external_ids.append(TitleExternalId(**eid))
 
     db.add(title)
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception:
+        # Handle duplicate key / race condition — title may have been
+        # inserted by a parallel task. Rollback and fetch existing.
+        await db.rollback()
+        existing = await get_title_by_tmdb_id(db, tmdb_id)
+        if existing:
+            return existing
+        raise
     await db.refresh(title)
 
     # Reload with relationships

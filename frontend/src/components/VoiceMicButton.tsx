@@ -52,9 +52,7 @@ export default function VoiceMicButton({ onTranscript, disabled, className = '' 
     }
 
     recognition.onerror = (event: any) => {
-      if (event.error !== 'aborted') {
-        console.warn('Speech recognition error:', event.error)
-      }
+      console.warn('Speech recognition error:', event.error, event)
       stop()
     }
 
@@ -68,8 +66,13 @@ export default function VoiceMicButton({ onTranscript, disabled, className = '' 
     }
 
     recognitionRef.current = recognition
-    recognition.start()
-    setListening(true)
+    try {
+      recognition.start()
+      setListening(true)
+    } catch (err) {
+      console.error('Failed to start speech recognition:', err)
+      recognitionRef.current = null
+    }
   }, [disabled, onTranscript, stop])
 
   const toggle = useCallback(() => {
@@ -97,10 +100,10 @@ export default function VoiceMicButton({ onTranscript, disabled, className = '' 
       onClick={toggle}
       disabled={disabled}
       title={listening ? 'Stop listening' : 'Voice input'}
-      className={`flex items-center justify-center rounded-xl transition-colors disabled:opacity-50 ${
+      className={`flex items-center justify-center rounded-xl transition-all disabled:opacity-50 ${
         listening
-          ? 'bg-red-600 text-white animate-pulse'
-          : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-white'
+          ? 'bg-red-500/20 text-red-400 border border-red-500/30 animate-pulse shadow-lg shadow-red-500/10'
+          : 'bg-white/5 text-gray-500 border border-white/8 hover:bg-white/10 hover:text-white'
       } ${className}`}
     >
       <svg

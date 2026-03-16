@@ -38,3 +38,4 @@ backups/*.gz
 
 # Claude
 .claude/
+certs/

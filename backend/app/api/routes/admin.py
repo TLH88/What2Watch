@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
 from app.models.title import Title, TitleLocalAvailability
-from app.models.user import User, UserFeedback, UserWatchHistory, UserWatchlistItem
+from app.models.user import LanguagePreference, User, UserFeedback, UserWatchHistory, UserWatchlistItem
 from app.services.integrations.tmdb import tmdb_client
 
 logger = logging.getLogger(__name__)
@@ -57,6 +57,14 @@ async def admin_status(db: AsyncSession = Depends(get_db)):
             sources["trakt"] = {"status": "not_configured"}
     except Exception:
         sources["trakt"] = {"status": "not_configured"}
+
+    # AI provider
+    try:
+        from app.services.ai.provider import test_ai_provider
+        ai_status = await test_ai_provider()
+        sources["ai"] = ai_status
+    except Exception as e:
+        sources["ai"] = {"status": "error", "detail": str(e)}
 
     # Database connectivity
     try:
@@ -131,3 +139,146 @@ async def sync_trakt_all(db: AsyncSession = Depends(get_db)):
             logger.warning(f"Trakt sync failed for user {uid}")
 
     return {"status": "ok", "users_synced": len(user_ids), "imported": total}
+
+
+@router.get("/languages")
+async def get_language_preferences(db: AsyncSession = Depends(get_db)):
+    """Get configured language preferences."""
+    result = await db.execute(
+        select(LanguagePreference).order_by(LanguagePreference.priority)
+    )
+    langs = result.scalars().all()
+    return [
+        {"id": lp.id, "language_code": lp.language_code, "language_name": lp.language_name, "priority": lp.priority}
+        for lp in langs
+    ]
+
+
+@router.put("/languages")
+async def update_language_preferences(data: dict, db: AsyncSession = Depends(get_db)):
+    """Set language preferences (up to 5). Replaces all existing preferences.
+
+    Expected: {"languages": [{"code": "en", "name": "English"}, ...]}
+    """
+    languages = data.get("languages", [])
+    if len(languages) > 5:
+        return {"status": "error", "detail": "Maximum 5 language preferences allowed"}
+
+    # Clear existing
+    await db.execute(select(LanguagePreference))  # ensure table is loaded
+    existing = (await db.execute(select(LanguagePreference))).scalars().all()
+    for lp in existing:
+        await db.delete(lp)
+
+    # Insert new
+    for i, lang in enumerate(languages):
+        code = lang.get("code", "").strip().lower()
+        name = lang.get("name", "").strip()
+        if not code or not name:
+            continue
+        db.add(LanguagePreference(language_code=code, language_name=name, priority=i))
+
+    await db.commit()
+    return {"status": "ok", "count": len(languages)}
+
+
+@router.get("/ai-settings")
+async def get_ai_settings():
+    """Get current AI provider configuration."""
+    from app.services.ai.provider import test_ai_provider
+    status = await test_ai_provider()
+    return status
+
+
+@router.put("/ai-settings")
+async def update_ai_settings(data: dict):
+    """Switch AI provider at runtime."""
+    provider = data.get("provider")
+    if provider not in ("openai", "anthropic", "google"):
+        return {"status": "error", "detail": "Invalid provider. Must be: openai, anthropic, google"}
+
+    from app.services.ai.provider import set_ai_provider
+    success = set_ai_provider(provider)
+    if success:
+        return {"status": "ok", "provider": provider}
+    return {"status": "error", "detail": f"Failed to switch to {provider}. Check API key."}
+
+
+# --- API Key Management ---
+
+API_KEY_FIELDS = [
+    {"name": "openai_api_key", "label": "OpenAI API Key"},
+    {"name": "anthropic_api_key", "label": "Anthropic API Key"},
+    {"name": "google_ai_api_key", "label": "Google AI API Key"},
+    {"name": "tmdb_api_key", "label": "TMDB API Key"},
+    {"name": "trakt_client_id", "label": "Trakt Client ID"},
+    {"name": "trakt_client_secret", "label": "Trakt Client Secret"},
+    {"name": "jellyfin_url", "label": "Jellyfin URL"},
+    {"name": "jellyfin_api_key", "label": "Jellyfin API Key"},
+]
+
+AI_KEY_FIELDS = {"openai_api_key", "anthropic_api_key", "google_ai_api_key"}
+
+
+def _mask(value: str) -> str:
+    if not value:
+        return ""
+    if len(value) <= 4:
+        return "••••"
+    return "••••" + value[-4:]
+
+
+@router.get("/api-keys")
+async def get_api_keys():
+    """Return all configurable API keys with masked values."""
+    from app.core.config import settings
+
+    keys = []
+    for field in API_KEY_FIELDS:
+        value = getattr(settings, field["name"], "")
+        keys.append({
+            "name": field["name"],
+            "label": field["label"],
+            "masked": _mask(value),
+            "configured": bool(value),
+        })
+    return {"keys": keys}
+
+
+@router.put("/api-keys")
+async def update_api_keys(data: dict):
+    """Update one or more API keys. Persists to .env and updates runtime settings."""
+    from app.core.config import settings, update_env_file, ENV_KEY_MAP
+
+    keys_to_update = data.get("keys", {})
+    if not keys_to_update:
+        return {"status": "error", "detail": "No keys provided"}
+
+    valid_names = {f["name"] for f in API_KEY_FIELDS}
+    updated = []
+    env_updates = {}
+
+    for name, value in keys_to_update.items():
+        if name not in valid_names:
+            continue
+        # Update in-memory settings
+        setattr(settings, name, value)
+        # Map to .env variable name
+        env_var = ENV_KEY_MAP.get(name)
+        if env_var:
+            env_updates[env_var] = value
+        updated.append(name)
+
+    # Persist to .env file
+    if env_updates:
+        update_env_file(env_updates)
+
+    # Reinitialize AI provider if an AI key was changed
+    if AI_KEY_FIELDS & set(updated):
+        try:
+            from app.services.ai.provider import set_ai_provider
+            set_ai_provider(settings.ai_provider)
+        except Exception:
+            logger.warning("Failed to reinitialize AI provider after key update")
+
+    return {"status": "ok", "updated": updated}
