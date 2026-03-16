@@ -39,3 +39,6 @@ backups/*.gz
 # Claude
 .claude/
 certs/
+
+# Source images (dupes of frontend/public/images/)
+images/
