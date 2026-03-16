@@ -4,11 +4,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.schemas.discover import (
     DiscoverFeedbackRequest,
+    DiscoverMoreRequest,
     DiscoverRespondRequest,
     DiscoverResponse,
     DiscoverStartRequest,
 )
-from app.services.discover_service import respond_discover, start_discover
+from app.services.discover_service import load_more_discover, respond_discover, start_discover
+from app.services.title_service import fetch_and_store_title
 from app.models.user import PendingRating, UserFeedback, UserWatchHistory, UserWatchlistItem
 from app.models.title import Title
 from sqlalchemy import select, and_
@@ -23,7 +25,8 @@ async def discover_start(
     db: AsyncSession = Depends(get_db),
 ):
     return await start_discover(
-        db, user_id, data.query, data.media_type, data.genres
+        db, user_id, data.query, data.media_type, data.genres,
+        include_watched=data.include_watched,
     )
 
 
@@ -33,6 +36,14 @@ async def discover_respond(
     db: AsyncSession = Depends(get_db),
 ):
     return await respond_discover(db, data.session_id, data.answer)
+
+
+@router.post("/discover/more", response_model=DiscoverResponse)
+async def discover_more(
+    data: DiscoverMoreRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    return await load_more_discover(db, data.session_id)
 
 
 @router.post("/discover/feedback")
@@ -47,7 +58,14 @@ async def discover_feedback(
     )
     title = result.scalar_one_or_none()
     if not title:
-        return {"status": "title_not_found"}
+        # Auto-fetch from TMDB (e.g., collection part not yet in DB)
+        try:
+            title = await fetch_and_store_title(db, data.tmdb_id, "movie")
+        except Exception:
+            try:
+                title = await fetch_and_store_title(db, data.tmdb_id, "tv")
+            except Exception:
+                return {"status": "title_not_found"}
 
     if data.feedback in ("thumbs_up", "thumbs_down"):
         fb = UserFeedback(

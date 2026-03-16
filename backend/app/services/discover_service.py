@@ -1,17 +1,26 @@
 import logging
 import uuid
-from datetime import date
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.title import Title, TitleGenre, TitleLocalAvailability, TitleVideo
-from app.models.user import UserFeedback, UserPreferences, UserWatchHistory
+from app.models.user import LanguagePreference, UserFeedback, UserGenrePreference, UserPreferences, UserWatchHistory
 from app.schemas.discover import (
+    AICandidate,
     ClarifyingQuestion,
+    CollectionInfo,
+    CollectionPart,
     DiscoverResponse,
-    ParsedQuery,
+    IntentResult,
     RecommendationResult,
+)
+from app.services.ai import get_ai_provider, parse_ai_json
+from app.services.ai.prompts import (
+    INTENT_AND_CANDIDATES_SYSTEM,
+    INTENT_AND_CANDIDATES_USER,
+    NARROW_CANDIDATES_SYSTEM,
+    NARROW_CANDIDATES_USER,
 )
 from app.services.integrations.tmdb import tmdb_client
 from app.services.title_service import fetch_and_store_title
@@ -21,6 +30,13 @@ logger = logging.getLogger(__name__)
 # In-memory session store (sufficient for household app)
 _sessions: dict[str, dict] = {}
 
+# Max narrowing rounds before forcing results
+MAX_NARROWING_ROUNDS = 3
+
+# Target candidate count — narrowing stops when at or below this
+TARGET_CANDIDATES = 25
+
+# TMDB genre ID maps (used by curveball logic)
 GENRE_MAP = {
     "action": 28, "adventure": 12, "animation": 16, "comedy": 35,
     "crime": 80, "documentary": 99, "drama": 18, "family": 10751,
@@ -37,184 +53,13 @@ TV_GENRE_MAP = {
     "romance": 10749, "thriller": 53, "horror": 27,
 }
 
-ERA_RANGES = {
-    "classic": (None, 1979), "80s": (1980, 1989), "90s": (1990, 1999),
-    "2000s": (2000, 2009), "2010s": (2010, 2019), "recent": (2020, None),
-    "new": (2023, None), "old": (None, 1999),
-}
 
+# ---------------------------------------------------------------------------
+# User context loading
+# ---------------------------------------------------------------------------
 
-def parse_query(query: str, media_type: str | None = None, genre_chips: list[str] | None = None) -> ParsedQuery:
-    """Parse a free-text query into structured fields using keyword matching."""
-    q = query.lower().strip()
-    parsed = ParsedQuery(raw_query=query)
-
-    # Media type
-    if media_type:
-        parsed.media_type = media_type
-    elif "tv show" in q or "series" in q or "show" in q:
-        parsed.media_type = "tv"
-    elif "movie" in q or "film" in q:
-        parsed.media_type = "movie"
-
-    # Genres from chips
-    if genre_chips:
-        parsed.genres = [g.lower() for g in genre_chips]
-
-    # Genres from text
-    for genre in GENRE_MAP:
-        if genre in q and genre not in parsed.genres:
-            parsed.genres.append(genre)
-
-    # Mood
-    mood_keywords = {
-        "feel-good": ["feel good", "feel-good", "uplifting", "happy", "heartwarming", "lighthearted"],
-        "dark": ["dark", "gritty", "intense", "disturbing", "bleak"],
-        "funny": ["funny", "hilarious", "laugh", "comedic"],
-        "scary": ["scary", "terrifying", "creepy", "horror"],
-        "thought-provoking": ["thought-provoking", "deep", "philosophical", "cerebral", "mind-bending"],
-        "exciting": ["exciting", "thrilling", "edge of seat", "adrenaline"],
-        "relaxing": ["relaxing", "chill", "easy", "casual", "light"],
-        "emotional": ["emotional", "moving", "tearjerker", "cry"],
-    }
-    for mood, keywords in mood_keywords.items():
-        if any(kw in q for kw in keywords):
-            parsed.mood = mood
-            break
-
-    # Era
-    for era, _ in ERA_RANGES.items():
-        if era in q:
-            parsed.era = era
-            break
-    if not parsed.era:
-        for decade in ["1950", "1960", "1970", "1980", "1990", "2000", "2010", "2020"]:
-            if decade in q:
-                parsed.era = f"{decade[2:]}s"
-                break
-
-    # Runtime
-    if any(w in q for w in ["short", "quick", "brief"]):
-        parsed.runtime_pref = "short"
-    elif any(w in q for w in ["long", "epic", "extended"]):
-        parsed.runtime_pref = "long"
-
-    # Quality
-    if any(w in q for w in ["best", "top rated", "highly rated", "acclaimed", "masterpiece"]):
-        parsed.quality_pref = "high"
-
-    # Hidden gem
-    if any(w in q for w in ["hidden gem", "underrated", "lesser known", "obscure", "overlooked"]):
-        parsed.hidden_gem = True
-
-    # Extract remaining keywords
-    stop_words = {"a", "an", "the", "i", "me", "my", "want", "something", "like", "find",
-                  "good", "really", "very", "that", "with", "for", "is", "to", "of", "and",
-                  "in", "it", "on", "but", "or", "some", "about", "watch", "see", "looking"}
-    words = q.split()
-    parsed.keywords = [w for w in words if w not in stop_words and len(w) > 2
-                       and w not in GENRE_MAP and w not in ERA_RANGES]
-
-    return parsed
-
-
-def get_clarifying_question(parsed: ParsedQuery) -> ClarifyingQuestion | None:
-    """Return the single most useful clarifying question, or None if ready."""
-    if not parsed.media_type:
-        return ClarifyingQuestion(
-            question="Are you looking for a movie or a TV show?",
-            options=["Movie", "TV Show", "Either"],
-            field="media_type",
-        )
-    if not parsed.genres and not parsed.mood and not parsed.keywords:
-        return ClarifyingQuestion(
-            question="What kind of mood or genre are you in the mood for?",
-            options=["Action", "Comedy", "Drama", "Sci-Fi", "Thriller", "Horror", "Feel-Good", "Something Different"],
-            field="genres",
-        )
-    return None
-
-
-def apply_answer(parsed: ParsedQuery, field: str, answer: str) -> ParsedQuery:
-    """Apply a clarifying answer to the parsed query."""
-    a = answer.lower().strip()
-    if field == "media_type":
-        if "movie" in a:
-            parsed.media_type = "movie"
-        elif "tv" in a or "show" in a:
-            parsed.media_type = "tv"
-    elif field == "genres":
-        if a == "something different":
-            parsed.hidden_gem = True
-        elif a == "feel-good":
-            parsed.mood = "feel-good"
-        else:
-            parsed.genres.append(a)
-    elif field == "mood":
-        parsed.mood = a
-    elif field == "era":
-        parsed.era = a
-    return parsed
-
-
-async def generate_recommendations(
-    db: AsyncSession, parsed: ParsedQuery, user_id: int
-) -> list[RecommendationResult]:
-    """Generate scored recommendations using TMDB discover + local data."""
-    media_type = parsed.media_type or "movie"
-    genre_map = TV_GENRE_MAP if media_type == "tv" else GENRE_MAP
-
-    # Build TMDB discover params
-    params: dict = {"sort_by": "vote_count.desc", "page": 1}
-
-    # Genre filter
-    genre_ids = []
-    for g in parsed.genres:
-        gid = genre_map.get(g)
-        if gid:
-            genre_ids.append(str(gid))
-    if genre_ids:
-        params["with_genres"] = ",".join(genre_ids)
-
-    # Era filter
-    if parsed.era and parsed.era in ERA_RANGES:
-        start, end = ERA_RANGES[parsed.era]
-        date_field = "first_air_date" if media_type == "tv" else "primary_release_date"
-        if start:
-            params[f"{date_field}.gte"] = f"{start}-01-01"
-        if end:
-            params[f"{date_field}.lte"] = f"{end}-12-31"
-
-    # Quality filter
-    if parsed.quality_pref == "high":
-        params["vote_average.gte"] = 7.5
-        params["vote_count.gte"] = 500
-
-    # Runtime filter (movies only)
-    if media_type == "movie" and parsed.runtime_pref:
-        if parsed.runtime_pref == "short":
-            params["with_runtime.lte"] = 100
-        elif parsed.runtime_pref == "long":
-            params["with_runtime.gte"] = 150
-
-    # Hidden gem adjustments
-    if parsed.hidden_gem:
-        params["vote_count.gte"] = 50
-        params["vote_count.lte"] = 1000
-        params["vote_average.gte"] = 7.0
-        params["sort_by"] = "vote_average.desc"
-
-    # Fetch from TMDB
-    try:
-        if media_type == "tv":
-            data = await tmdb_client.discover_tv(**params)
-        else:
-            data = await tmdb_client.discover_movies(**params)
-    except Exception:
-        logger.exception("TMDB discover call failed")
-        return []
-
-    # Load user context for scoring
+async def _load_user_context(db: AsyncSession, user_id: int):
+    """Load user preferences, watch history, disliked titles, and genre preferences."""
     user_prefs = (await db.execute(
         select(UserPreferences).where(UserPreferences.user_id == user_id)
     )).scalar_one_or_none()
@@ -237,198 +82,873 @@ async def generate_recommendations(
     for row in fb_result:
         disliked_tmdb_ids.add(row[0])
 
-    # Score and filter candidates
-    candidates: list[RecommendationResult] = []
-    for item in data.get("results", [])[:20]:
-        tmdb_id = item["id"]
+    # Genre preferences
+    genre_prefs: dict[str, str] = {}  # genre_name -> "like" | "dislike"
+    gp_result = await db.execute(
+        select(UserGenrePreference).where(UserGenrePreference.user_id == user_id)
+    )
+    for gp in gp_result.scalars():
+        genre_prefs[gp.genre_name.lower()] = gp.preference
 
-        # Hard filters
-        if tmdb_id in watched_tmdb_ids:
-            continue
-        if tmdb_id in disliked_tmdb_ids:
-            continue
+    # Language preferences (system-wide, not per-user)
+    lang_result = await db.execute(
+        select(LanguagePreference.language_code).order_by(LanguagePreference.priority)
+    )
+    preferred_langs = {row[0] for row in lang_result}
 
-        # Fetch and store full details
+    return user_prefs, watched_tmdb_ids, disliked_tmdb_ids, genre_prefs, preferred_langs
+
+
+# ---------------------------------------------------------------------------
+# AI: Intent detection + candidate generation
+# ---------------------------------------------------------------------------
+
+async def _ai_generate_candidates(
+    query: str,
+    genres: list[str],
+    language_prefs: set[str],
+    media_type: str | None,
+    taste_profile: str,
+) -> IntentResult | None:
+    """Call AI for intent detection + up to 100 candidates."""
+    provider = get_ai_provider()
+    if not provider:
+        logger.warning("No AI provider available for candidate generation")
+        return None
+
+    user_msg = INTENT_AND_CANDIDATES_USER.format(
+        query=query,
+        genres=", ".join(genres) if genres else "none specified",
+        languages=", ".join(language_prefs) if language_prefs else "any",
+        media_type=media_type or "any (movie or tv)",
+        taste_profile=taste_profile or "not yet available",
+    )
+
+    response = await provider.chat(INTENT_AND_CANDIDATES_SYSTEM, user_msg)
+    data = parse_ai_json(response)
+    if not data or not isinstance(data, dict):
+        logger.error("Failed to parse AI intent response")
+        return None
+
+    intent = data.get("intent", "RECOMMENDATION")
+    candidates = []
+    for c in data.get("candidates", []):
+        if isinstance(c, dict) and c.get("title"):
+            candidates.append(AICandidate(
+                title=c["title"],
+                year=c.get("year"),
+                media_type=c.get("media_type", "movie"),
+                confidence=c.get("confidence", 0.5),
+                relevance_reason=c.get("relevance_reason", ""),
+            ))
+
+    # Build narrowing question if AI provided one
+    question = None
+    if data.get("narrowing_question"):
+        question = ClarifyingQuestion(
+            question=data["narrowing_question"],
+            options=data.get("narrowing_options", []),
+            field=data.get("narrowing_field", "general"),
+        )
+
+    result = IntentResult(
+        intent=intent,
+        confidence=data.get("confidence", 0.5),
+        candidates=candidates,
+        extracted_filters=data.get("extracted_filters", {}),
+        question=question,
+    )
+
+    logger.info(
+        "AI intent=%s, confidence=%.2f, candidates=%d, has_question=%s",
+        result.intent, result.confidence, len(result.candidates), result.question is not None,
+    )
+    # Log top candidates for debugging
+    for c in result.candidates[:10]:
+        logger.info("  Candidate: %s (%s, %s) confidence=%.2f — %s", c.title, c.year, c.media_type, c.confidence, c.relevance_reason[:80])
+    return result
+
+
+# ---------------------------------------------------------------------------
+# AI: Narrow candidates based on user answer
+# ---------------------------------------------------------------------------
+
+async def _ai_narrow_candidates(
+    candidates: list[dict],
+    user_answer: str,
+    original_query: str,
+    question_text: str,
+    asked_questions: list[str],
+) -> dict | None:
+    """Call AI to filter candidates by user answer + add up to 10 new."""
+    provider = get_ai_provider()
+    if not provider:
+        return None
+
+    # Format candidates for the prompt
+    candidate_text = "\n".join(
+        f"- {c['title']} ({c.get('year', '?')}) [{c.get('media_type', 'movie')}] "
+        f"confidence={c.get('confidence', 0.5):.2f} — {c.get('relevance_reason', '')}"
+        for c in candidates
+    )
+
+    user_msg = NARROW_CANDIDATES_USER.format(
+        query=original_query,
+        question=question_text,
+        answer=user_answer,
+        asked_questions=", ".join(asked_questions) if asked_questions else "none",
+        count=len(candidates),
+        candidates=candidate_text,
+    )
+
+    response = await provider.chat(NARROW_CANDIDATES_SYSTEM, user_msg)
+    data = parse_ai_json(response)
+    if not data or not isinstance(data, dict):
+        logger.error("Failed to parse AI narrowing response")
+        return None
+
+    logger.info(
+        "AI narrowing: %d candidates returned, has_question=%s",
+        len(data.get("candidates", [])),
+        data.get("narrowing_question") is not None,
+    )
+    return data
+
+
+# ---------------------------------------------------------------------------
+# TMDB resolution: convert AI candidates to real TMDB entries
+# ---------------------------------------------------------------------------
+
+async def _resolve_single_candidate(
+    db: AsyncSession,
+    candidate: dict,
+) -> tuple[dict, Title | None]:
+    """Resolve a single AI candidate to a TMDB Title. Returns (candidate, title_or_none)."""
+    title_str = candidate["title"]
+    year = candidate.get("year")
+    media_type = candidate.get("media_type", "movie")
+
+    # Strategy 1: Search by title + year
+    search_fn = tmdb_client.search_movie if media_type == "movie" else tmdb_client.search_tv
+    try:
+        results = await search_fn(title_str, year=year)
+        if not results.get("results"):
+            # Strategy 2: Search without year
+            results = await search_fn(title_str)
+        if not results.get("results"):
+            # Strategy 3: Multi-search fallback
+            results = await tmdb_client.search_multi(title_str)
+    except Exception:
+        logger.exception("TMDB search failed for '%s'", title_str)
+        return candidate, None
+
+    tmdb_results = results.get("results", [])
+    if not tmdb_results:
+        logger.debug("No TMDB match for '%s' (%s)", title_str, year)
+        return candidate, None
+
+    # Pick best match — prefer exact year match if available
+    best = tmdb_results[0]
+    if year:
+        for r in tmdb_results:
+            r_date = r.get("release_date") or r.get("first_air_date") or ""
+            if r_date.startswith(str(year)):
+                best = r
+                break
+
+    tmdb_id = best["id"]
+    # Determine actual media_type from result
+    actual_type = best.get("media_type", media_type)
+    if actual_type not in ("movie", "tv"):
+        actual_type = media_type
+
+    try:
+        title = await fetch_and_store_title(db, tmdb_id, actual_type)
+        return candidate, title
+    except Exception:
+        logger.warning("fetch_and_store_title failed for tmdb_id=%s, attempting rollback + lookup", tmdb_id)
         try:
-            title = await fetch_and_store_title(db, tmdb_id, media_type)
+            await db.rollback()
+            # Title may already exist — try to fetch it directly
+            from app.services.title_service import get_title_by_tmdb_id
+            title = await get_title_by_tmdb_id(db, tmdb_id)
+            if title:
+                return candidate, title
+        except Exception:
+            logger.exception("Rollback/lookup also failed for tmdb_id=%s", tmdb_id)
+        return candidate, None
+
+
+async def _resolve_via_tmdb(
+    db: AsyncSession,
+    candidates: list[dict],
+    watched_ids: set[int],
+    disliked_ids: set[int],
+    include_watched: bool,
+    language_prefs: set[str] | None = None,
+    media_type: str | None = None,
+) -> list[RecommendationResult]:
+    """Resolve AI candidates to TMDB entries with parallel lookups.
+
+    Filters out watched titles (unless include_watched), disliked titles,
+    titles not matching language preferences, and titles not matching
+    the requested media_type.
+    Returns RecommendationResult list sorted by confidence.
+    """
+    resolved: list[RecommendationResult] = []
+    seen_ids: set[int] = set()
+
+    # Process candidates sequentially to avoid shared-session issues
+    # (asyncio.gather with a shared db session causes MissingGreenlet
+    # when one coroutine's commit expires another's ORM objects)
+    for candidate in candidates:
+        try:
+            candidate_data, title = await _resolve_single_candidate(db, candidate)
+        except Exception as e:
+            logger.error("Resolution error: %s", e)
+            continue
+
+        if title is None:
+            continue
+
+        # Dedup
+        if title.tmdb_id in seen_ids:
+            continue
+        seen_ids.add(title.tmdb_id)
+
+        # Dislike filter
+        if title.tmdb_id in disliked_ids:
+            continue
+
+        # Language filter
+        if language_prefs and title.original_language:
+            if title.original_language not in language_prefs:
+                continue
+
+        # Media type filter
+        if media_type and title.media_type != media_type:
+            continue
+
+        # Build result
+        rec = await _build_recommendation_result(db, title, candidate_data)
+
+        # Watch filter
+        if not include_watched and title.tmdb_id in watched_ids:
+            continue
+
+        resolved.append(rec)
+
+    # Sort by confidence descending
+    resolved.sort(key=lambda r: r.confidence, reverse=True)
+    return resolved
+
+
+async def _build_recommendation_result(
+    db: AsyncSession,
+    title: Title,
+    candidate: dict,
+) -> RecommendationResult:
+    """Build a RecommendationResult from a Title and AI candidate data."""
+    # Load genres
+    genre_result = await db.execute(
+        select(TitleGenre.genre_name).where(TitleGenre.title_id == title.id)
+    )
+    genres = [row[0] for row in genre_result]
+
+    # Check local availability
+    local_result = await db.execute(
+        select(TitleLocalAvailability).where(TitleLocalAvailability.title_id == title.id)
+    )
+    locally_available = local_result.scalar_one_or_none() is not None
+
+    # Get trailer
+    trailer_key = None
+    video_result = await db.execute(
+        select(TitleVideo.key).where(
+            TitleVideo.title_id == title.id,
+            TitleVideo.site == "YouTube",
+            TitleVideo.video_type.in_(["Trailer", "Teaser"]),
+        ).order_by(TitleVideo.video_type)  # Trailer before Teaser
+    )
+    trailer_row = video_result.first()
+    if trailer_row:
+        trailer_key = trailer_row[0]
+
+    confidence = candidate.get("confidence", 0.0)
+    explanation = candidate.get("relevance_reason", "")
+
+    return RecommendationResult(
+        tmdb_id=title.tmdb_id,
+        media_type=title.media_type,
+        title=title.title,
+        year=str(title.release_date.year) if title.release_date else None,
+        overview=title.overview,
+        poster_path=title.poster_path,
+        vote_average=title.vote_average,
+        content_rating=title.content_rating,
+        runtime=title.runtime,
+        genres=genres,
+        explanation=explanation,
+        score=confidence * 100,  # backward compat: score as 0-100
+        confidence=confidence,
+        is_hidden_gem=False,
+        is_curveball=False,
+        locally_available=locally_available,
+        trailer_key=trailer_key,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Hidden gem selection
+# ---------------------------------------------------------------------------
+
+def _select_hidden_gem(
+    resolved: list[RecommendationResult],
+    top_ids: set[int],
+) -> RecommendationResult | None:
+    """Pick hidden gem: highest vote_average from remaining candidates with rating >= 7.0."""
+    for r in resolved:
+        if r.tmdb_id not in top_ids and r.vote_average and r.vote_average >= 7.0:
+            r.is_hidden_gem = True
+            r.explanation = f"Hidden gem — rated {r.vote_average:.1f}/10. {r.explanation}"
+            return r
+    # Fallback: pick any remaining candidate not in top results
+    for r in resolved:
+        if r.tmdb_id not in top_ids:
+            r.is_hidden_gem = True
+            r.explanation = f"Hidden gem — {r.explanation}"
+            return r
+    return None
+
+
+async def _ai_suggest_hidden_gem(
+    db: AsyncSession,
+    query: str,
+    genres: list[str],
+    exclude_ids: set[int],
+    watched_ids: set[int],
+    disliked_ids: set[int],
+    language_prefs: set[str] | None = None,
+) -> RecommendationResult | None:
+    """Ask AI for a hidden gem when normal selection has no candidates."""
+    provider = get_ai_provider()
+    if not provider:
+        return None
+
+    genre_hint = f" in the {', '.join(genres)} genre(s)" if genres else ""
+    prompt = (
+        f'The user searched for: "{query}"{genre_hint}. '
+        f"Suggest ONE lesser-known but highly rated movie or TV show that fits this theme. "
+        f"It should be something most people haven't seen but is critically acclaimed or has a cult following. "
+        f"Respond with JSON only: "
+        f'{{"title": "Title", "year": 2020, "media_type": "movie", "confidence": 0.6, '
+        f'"relevance_reason": "Why this is a hidden gem"}}'
+    )
+
+    try:
+        response = await provider.chat(
+            "You are a movie expert specializing in lesser-known films and TV shows. Respond with JSON only.",
+            prompt,
+        )
+        data = parse_ai_json(response)
+        if not data or not data.get("title"):
+            return None
+
+        title_str = data["title"]
+        year = data.get("year")
+        mtype = data.get("media_type", "movie")
+
+        # Search TMDB
+        if mtype == "tv":
+            search_results = await tmdb_client.search_tv(title_str, year=year)
+        else:
+            search_results = await tmdb_client.search_movie(title_str, year=year)
+
+        for item in search_results.get("results", [])[:3]:
+            tmdb_id = item["id"]
+            if tmdb_id in exclude_ids or tmdb_id in watched_ids or tmdb_id in disliked_ids:
+                continue
+            try:
+                title = await fetch_and_store_title(db, tmdb_id, mtype)
+                if language_prefs and title.original_language and title.original_language not in language_prefs:
+                    continue
+                rec = await _build_recommendation_result(db, title, data)
+                rec.is_hidden_gem = True
+                rec.explanation = f"Hidden gem — {data.get('relevance_reason', 'A lesser-known gem')}"
+                return rec
+            except Exception:
+                continue
+    except Exception:
+        logger.exception("AI hidden gem suggestion failed")
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Curveball: independent TMDB discover search
+# ---------------------------------------------------------------------------
+
+async def _find_curveball(
+    db: AsyncSession,
+    query: str,
+    genres: list[str],
+    media_type: str | None,
+    exclude_ids: set[int],
+    watched_ids: set[int],
+    disliked_ids: set[int],
+    language_prefs: set[str] | None = None,
+) -> RecommendationResult | None:
+    """Find a curveball recommendation. Tries multiple strategies:
+    1. TMDB genre-based discover
+    2. TMDB keyword search
+    3. AI-suggested curveball (guaranteed fallback)
+    """
+    target_type = media_type or "movie"
+
+    # Strategy 1: Genre-based TMDB discover
+    if genres:
+        genre_name = genres[0].lower()
+        genre_map = GENRE_MAP if target_type == "movie" else TV_GENRE_MAP
+        genre_id = genre_map.get(genre_name)
+        if genre_id:
+            try:
+                discover_fn = tmdb_client.discover_movies if target_type == "movie" else tmdb_client.discover_tv
+                results = await discover_fn(with_genres=str(genre_id), sort_by="vote_average.desc", vote_count_gte=100)
+                for item in results.get("results", [])[:15]:
+                    tmdb_id = item["id"]
+                    if tmdb_id in exclude_ids or tmdb_id in watched_ids or tmdb_id in disliked_ids:
+                        continue
+                    try:
+                        title = await fetch_and_store_title(db, tmdb_id, target_type)
+                        if language_prefs and title.original_language and title.original_language not in language_prefs:
+                            continue
+                        rec = await _build_recommendation_result(db, title, {
+                            "confidence": 0.3,
+                            "relevance_reason": f"A different take on {genre_name}",
+                        })
+                        rec.is_curveball = True
+                        rec.explanation = f"Curveball — a different take on {genre_name}"
+                        return rec
+                    except Exception:
+                        continue
+            except Exception:
+                logger.exception("Curveball genre discover failed")
+
+    # Strategy 2: Keyword search from user query
+    words = [w for w in query.lower().split() if len(w) > 3]
+    for word in words[:3]:
+        try:
+            search_results = await tmdb_client.search_multi(word)
+            for item in search_results.get("results", [])[:10]:
+                item_type = item.get("media_type")
+                if item_type not in ("movie", "tv"):
+                    continue
+                tmdb_id = item["id"]
+                if tmdb_id in exclude_ids or tmdb_id in watched_ids or tmdb_id in disliked_ids:
+                    continue
+                try:
+                    title = await fetch_and_store_title(db, tmdb_id, item_type)
+                    if language_prefs and title.original_language and title.original_language not in language_prefs:
+                        continue
+                    rec = await _build_recommendation_result(db, title, {
+                        "confidence": 0.3,
+                        "relevance_reason": f"A different take based on '{word}'",
+                    })
+                    rec.is_curveball = True
+                    rec.explanation = f"Curveball — a different take based on '{word}'"
+                    return rec
+                except Exception:
+                    continue
         except Exception:
             continue
 
-        if not title:
+    # Strategy 3: AI-suggested curveball (guaranteed fallback)
+    provider = get_ai_provider()
+    if provider:
+        genre_hint = f" in the {', '.join(genres)} genre(s)" if genres else ""
+        prompt = (
+            f'The user searched for: "{query}"{genre_hint}. '
+            f"Suggest ONE movie or TV show that is an unexpected, creative curveball recommendation. "
+            f"It should be tangentially related but from a different angle — a different genre, era, or style "
+            f"that shares a thematic connection. "
+            f"Respond with JSON only: "
+            f'{{"title": "Title", "year": 2020, "media_type": "movie", "confidence": 0.3, '
+            f'"relevance_reason": "Why this is an unexpected but interesting pick"}}'
+        )
+        try:
+            response = await provider.chat(
+                "You are a creative movie recommender who loves surprising people with unexpected picks. Respond with JSON only.",
+                prompt,
+            )
+            data = parse_ai_json(response)
+            if data and data.get("title"):
+                title_str = data["title"]
+                year = data.get("year")
+                mtype = data.get("media_type", "movie")
+                if mtype == "tv":
+                    search_results = await tmdb_client.search_tv(title_str, year=year)
+                else:
+                    search_results = await tmdb_client.search_movie(title_str, year=year)
+                for item in search_results.get("results", [])[:3]:
+                    tmdb_id = item["id"]
+                    if tmdb_id in exclude_ids or tmdb_id in watched_ids or tmdb_id in disliked_ids:
+                        continue
+                    try:
+                        title = await fetch_and_store_title(db, tmdb_id, mtype)
+                        if language_prefs and title.original_language and title.original_language not in language_prefs:
+                            continue
+                        rec = await _build_recommendation_result(db, title, data)
+                        rec.is_curveball = True
+                        rec.explanation = f"Curveball — {data.get('relevance_reason', 'An unexpected pick')}"
+                        return rec
+                    except Exception:
+                        continue
+        except Exception:
+            logger.exception("AI curveball suggestion failed")
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Final assembly: top 5 + hidden gem + curveball
+# ---------------------------------------------------------------------------
+
+async def _assemble_final(
+    db: AsyncSession,
+    resolved: list[RecommendationResult],
+    query: str,
+    genres: list[str],
+    media_type: str | None,
+    user_id: int,
+    watched_ids: set[int],
+    disliked_ids: set[int],
+    language_prefs: set[str] | None = None,
+) -> list[RecommendationResult]:
+    """Assemble final 12 results: top 10 + hidden gem + curveball.
+
+    Hidden gem and curveball are MANDATORY — each has multiple fallback
+    strategies to guarantee they always appear.
+    """
+
+    # Top 10
+    top_10 = resolved[:10]
+    top_ids = {r.tmdb_id for r in top_10}
+
+    final = list(top_10)
+
+    # Hidden gem from positions 11-30
+    remaining = resolved[10:30]
+    hidden_gem = _select_hidden_gem(remaining, top_ids)
+
+    # Hidden gem fallback: ask AI for a suggestion
+    if not hidden_gem:
+        hidden_gem = await _ai_suggest_hidden_gem(
+            db, query, genres, top_ids, watched_ids, disliked_ids, language_prefs,
+        )
+
+    if hidden_gem:
+        top_ids.add(hidden_gem.tmdb_id)
+        final.append(hidden_gem)
+
+    # Curveball (has 3-strategy fallback internally)
+    curveball = await _find_curveball(
+        db, query, genres, media_type,
+        exclude_ids=top_ids,
+        watched_ids=watched_ids,
+        disliked_ids=disliked_ids,
+        language_prefs=language_prefs,
+    )
+    if curveball:
+        final.append(curveball)
+
+    return final
+
+
+# ---------------------------------------------------------------------------
+# Collection enrichment (on-demand from TMDB, not persisted)
+# ---------------------------------------------------------------------------
+
+async def _enrich_collections(results: list[RecommendationResult]) -> None:
+    """Fetch TMDB collection data for movie results that belong to a collection."""
+    for rec in results:
+        if rec.media_type != "movie":
             continue
-
-        # Runtime hard filter
-        if user_prefs and user_prefs.preferred_runtime_max and title.runtime:
-            if title.runtime > user_prefs.preferred_runtime_max:
+        try:
+            movie_data = await tmdb_client.get_movie(rec.tmdb_id)
+            btc = movie_data.get("belongs_to_collection")
+            if not btc:
                 continue
-
-        # Check local availability
-        locally_available = bool(title.local_availability)
-
-        # Get trailer
-        trailer_key = None
-        for v in title.videos:
-            if v.video_type == "Trailer" and v.site == "YouTube":
-                trailer_key = v.key
-                break
-
-        # Score
-        score = compute_score(title, parsed, user_prefs, locally_available)
-
-        # Build genre list
-        genre_names = [g.genre_name for g in title.genres]
-
-        # Year
-        year = str(title.release_date.year) if title.release_date else None
-
-        # Explanation
-        explanation = build_explanation(title, parsed, locally_available)
-
-        candidates.append(RecommendationResult(
-            tmdb_id=title.tmdb_id,
-            media_type=title.media_type,
-            title=title.title,
-            year=year,
-            overview=title.overview,
-            poster_path=title.poster_path,
-            vote_average=title.vote_average,
-            content_rating=title.content_rating,
-            runtime=title.runtime,
-            genres=genre_names,
-            explanation=explanation,
-            score=score,
-            is_hidden_gem=parsed.hidden_gem or (title.vote_count and title.vote_count < 500),
-            locally_available=locally_available,
-            trailer_key=trailer_key,
-        ))
-
-    # Sort by score descending
-    candidates.sort(key=lambda r: r.score, reverse=True)
-
-    # Return top 5 (3 best + up to 1 hidden gem + 1 curveball)
-    return candidates[:5]
+            collection_data = await tmdb_client.get_collection(btc["id"])
+            parts = []
+            for part in sorted(
+                collection_data.get("parts", []),
+                key=lambda p: p.get("release_date") or "",
+            ):
+                rd = part.get("release_date") or ""
+                parts.append(CollectionPart(
+                    tmdb_id=part["id"],
+                    title=part.get("title", ""),
+                    year=rd[:4] if len(rd) >= 4 else None,
+                    poster_path=part.get("poster_path"),
+                    overview=part.get("overview"),
+                ))
+            rec.collection = CollectionInfo(
+                collection_id=btc["id"],
+                name=btc.get("name", ""),
+                parts=parts,
+            )
+        except Exception:
+            logger.debug("Collection fetch failed for tmdb_id=%s", rec.tmdb_id)
 
 
-def compute_score(title, parsed: ParsedQuery, prefs, locally_available: bool) -> float:
-    """Weighted scoring per the design plan."""
-    score = 0.0
-
-    # Quality composite (35%)
-    if title.vote_average:
-        score += (title.vote_average / 10.0) * 35
-
-    # Genre/mood fit (25%)
-    title_genres = {g.genre_name.lower() for g in title.genres}
-    if parsed.genres:
-        matches = sum(1 for g in parsed.genres if g in title_genres)
-        score += (matches / max(len(parsed.genres), 1)) * 25
-    elif parsed.mood:
-        mood_genre_map = {
-            "funny": {"comedy"}, "scary": {"horror"}, "exciting": {"action", "thriller"},
-            "dark": {"thriller", "crime", "horror"}, "feel-good": {"comedy", "family", "romance"},
-            "thought-provoking": {"drama", "science fiction"}, "emotional": {"drama", "romance"},
-            "relaxing": {"comedy", "family", "animation"},
-        }
-        mood_genres = mood_genre_map.get(parsed.mood, set())
-        if mood_genres & title_genres:
-            score += 25
-
-    # Freshness/diversity (15%)
-    if title.popularity:
-        if parsed.hidden_gem and title.popularity < 50:
-            score += 15
-        elif not parsed.hidden_gem and title.popularity > 20:
-            score += min(title.popularity / 100 * 15, 15)
-
-    # Local availability boost (10%)
-    if locally_available:
-        score += 10
-
-    # Hidden gem bonus (10%)
-    if title.vote_count and title.vote_count < 500 and title.vote_average and title.vote_average >= 7.0:
-        score += 10
-
-    # Recency bonus (5%)
-    if title.release_date:
-        years_old = (date.today().year - title.release_date.year)
-        if years_old <= 2:
-            score += 5
-        elif years_old <= 5:
-            score += 3
-
-    return round(score, 1)
-
-
-def build_explanation(title, parsed: ParsedQuery, locally_available: bool) -> str:
-    """Build a short human-readable explanation for why this was recommended."""
-    parts = []
-    title_genres = [g.genre_name for g in title.genres[:3]]
-
-    if title.vote_average and title.vote_average >= 8.0:
-        parts.append(f"Highly rated ({title.vote_average:.1f}/10)")
-    elif title.vote_average and title.vote_average >= 7.0:
-        parts.append(f"Well reviewed ({title.vote_average:.1f}/10)")
-
-    if parsed.genres:
-        matching = [g for g in title_genres if g.lower() in parsed.genres]
-        if matching:
-            parts.append(f"Matches your {', '.join(matching).lower()} preference")
-
-    if parsed.mood:
-        parts.append(f"Fits your {parsed.mood} mood")
-
-    if locally_available:
-        parts.append("Available in your library")
-
-    if title.vote_count and title.vote_count < 500:
-        parts.append("Hidden gem")
-
-    return ". ".join(parts) if parts else "Recommended based on your search"
-
+# ---------------------------------------------------------------------------
+# Entry point: start discover
+# ---------------------------------------------------------------------------
 
 async def start_discover(
-    db: AsyncSession, user_id: int, query: str,
-    media_type: str | None = None, genres: list[str] | None = None
+    db: AsyncSession,
+    user_id: int,
+    query: str,
+    media_type: str | None = None,
+    genres: list[str] | None = None,
+    include_watched: bool = False,
 ) -> DiscoverResponse:
+    """Start a new discover session. AI determines intent and generates candidates."""
     session_id = str(uuid.uuid4())
-    parsed = parse_query(query, media_type, genres)
+    genres = genres or []
 
-    question = get_clarifying_question(parsed)
-    if question:
-        _sessions[session_id] = {"parsed": parsed, "user_id": user_id, "questions_asked": 1}
-        return DiscoverResponse(session_id=session_id, status="asking", question=question)
+    # Load user context
+    user_prefs, watched_ids, disliked_ids, genre_prefs, preferred_langs = await _load_user_context(db, user_id)
 
-    # Go straight to results
-    results = await generate_recommendations(db, parsed, user_id)
-    _sessions[session_id] = {"parsed": parsed, "user_id": user_id, "results": True}
-    return DiscoverResponse(session_id=session_id, status="results", results=results)
+    # Call AI for intent detection + candidates
+    intent_result = await _ai_generate_candidates(
+        query=query,
+        genres=genres,
+        language_prefs=preferred_langs,
+        media_type=media_type,
+        taste_profile=user_prefs.taste_profile if user_prefs else ""
+    )
 
-
-async def respond_discover(
-    db: AsyncSession, session_id: str, answer: str
-) -> DiscoverResponse:
-    session = _sessions.get(session_id)
-    if not session:
+    if not intent_result or not intent_result.candidates:
+        logger.warning("AI returned no candidates for query: %s", query)
         return DiscoverResponse(session_id=session_id, status="results", results=[])
 
-    parsed: ParsedQuery = session["parsed"]
-    user_id: int = session["user_id"]
-    questions_asked: int = session.get("questions_asked", 0)
+    # Convert candidates to dicts for session storage
+    candidate_dicts = [c.model_dump() for c in intent_result.candidates]
 
-    # Apply the answer
-    question = get_clarifying_question(parsed)
-    if question:
-        parsed = apply_answer(parsed, question.field, answer)
-        session["parsed"] = parsed
+    # Merge AI-extracted genres into working genres list
+    extracted_genres = intent_result.extracted_filters.get("genres", [])
+    for g in extracted_genres:
+        if g.lower() not in [x.lower() for x in genres]:
+            genres.append(g)
 
-    # Check if we need another question (max 3)
-    if questions_asked < 3:
-        next_question = get_clarifying_question(parsed)
-        if next_question:
-            session["questions_asked"] = questions_asked + 1
-            return DiscoverResponse(session_id=session_id, status="asking", question=next_question)
+    # Store session
+    _sessions[session_id] = {
+        "user_id": user_id,
+        "query": query,
+        "media_type": media_type,
+        "genres": genres,
+        "include_watched": include_watched,
+        "intent": intent_result.intent,
+        "candidates": candidate_dicts,
+        "narrowing_round": 0,
+        "asked_questions": [],
+        "language_prefs": preferred_langs,
+        "watched_ids": watched_ids,
+        "disliked_ids": disliked_ids,
+    }
 
-    # Generate results
-    results = await generate_recommendations(db, parsed, user_id)
-    session["results"] = True
-    return DiscoverResponse(session_id=session_id, status="results", results=results)
+    # KNOWN_TITLE and TITLE_RECALL: resolve immediately
+    # KNOWN_TITLE: single result, no hidden gem or curveball
+    if intent_result.intent == "KNOWN_TITLE":
+        resolved = await _resolve_via_tmdb(
+            db, candidate_dicts, watched_ids, disliked_ids,
+            include_watched=True,  # always show for title lookups
+            language_prefs=None,  # no language filter for direct lookups
+        )
+        await _enrich_collections(resolved)
+        return DiscoverResponse(session_id=session_id, status="results", results=resolved)
+
+    # TITLE_RECALL / RECOMMENDATION / SURPRISE_ME: full assembly with hidden gem + curveball
+    candidate_count = len(candidate_dicts)
+    logger.info("Candidate count after AI generation: %d", candidate_count)
+
+    if candidate_count > TARGET_CANDIDATES and intent_result.question:
+        # Ask narrowing question
+        _sessions[session_id]["asked_questions"].append(intent_result.question.question)
+        return DiscoverResponse(
+            session_id=session_id,
+            status="asking",
+            question=intent_result.question,
+        )
+
+    # Resolve and assemble final results
+    resolved = await _resolve_via_tmdb(
+        db, candidate_dicts, watched_ids, disliked_ids,
+        include_watched, preferred_langs, media_type,
+    )
+    final = await _assemble_final(
+        db, resolved, query, genres, media_type, user_id,
+        watched_ids, disliked_ids, preferred_langs,
+    )
+    await _enrich_collections(final)
+
+    # Store all resolved results (excluding special picks) for "load more"
+    final_ids = {r.tmdb_id for r in final}
+    remaining = [r for r in resolved if r.tmdb_id not in final_ids]
+    _sessions[session_id]["all_remaining"] = [r.model_dump() for r in remaining]
+    _sessions[session_id]["more_offset"] = 0
+
+    has_more = len(remaining) > 0
+    return DiscoverResponse(session_id=session_id, status="results", results=final, has_more=has_more)
+
+
+# ---------------------------------------------------------------------------
+# Entry point: load more results from an existing session
+# ---------------------------------------------------------------------------
+
+LOAD_MORE_PAGE_SIZE = 10
+
+
+async def load_more_discover(
+    db: AsyncSession,
+    session_id: str,
+) -> DiscoverResponse:
+    """Return the next batch of results from a completed discover session."""
+    session = _sessions.get(session_id)
+    if not session:
+        logger.error("Session not found for load_more: %s", session_id)
+        return DiscoverResponse(session_id=session_id, status="results", results=[])
+
+    all_remaining = session.get("all_remaining", [])
+    offset = session.get("more_offset", 0)
+
+    # Slice next page
+    page = all_remaining[offset : offset + LOAD_MORE_PAGE_SIZE]
+    next_offset = offset + LOAD_MORE_PAGE_SIZE
+    session["more_offset"] = next_offset
+
+    # Convert dicts back to RecommendationResult
+    results = [RecommendationResult(**r) for r in page]
+    await _enrich_collections(results)
+
+    has_more = next_offset < len(all_remaining)
+    return DiscoverResponse(
+        session_id=session_id,
+        status="results",
+        results=results,
+        has_more=has_more,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Entry point: respond to narrowing question
+# ---------------------------------------------------------------------------
+
+async def respond_discover(
+    db: AsyncSession,
+    session_id: str,
+    answer: str,
+) -> DiscoverResponse:
+    """Handle user's answer to a narrowing question."""
+    session = _sessions.get(session_id)
+    if not session:
+        logger.error("Session not found: %s", session_id)
+        return DiscoverResponse(session_id=session_id, status="results", results=[])
+
+    user_id = session["user_id"]
+    query = session["query"]
+    candidates = session["candidates"]
+    asked_questions = session["asked_questions"]
+    narrowing_round = session["narrowing_round"] + 1
+    include_watched = session["include_watched"]
+    watched_ids = session["watched_ids"]
+    disliked_ids = session["disliked_ids"]
+    language_prefs = session["language_prefs"]
+    genres = session["genres"]
+    media_type = session["media_type"]
+
+    # Get the last asked question text
+    last_question = asked_questions[-1] if asked_questions else ""
+
+    # Call AI to narrow
+    narrow_result = await _ai_narrow_candidates(
+        candidates=candidates,
+        user_answer=answer,
+        original_query=query,
+        question_text=last_question,
+        asked_questions=asked_questions,
+    )
+
+    if narrow_result and narrow_result.get("candidates"):
+        # Replace candidates with narrowed list
+        new_candidates = []
+        for c in narrow_result["candidates"]:
+            if isinstance(c, dict) and c.get("title"):
+                new_candidates.append({
+                    "title": c["title"],
+                    "year": c.get("year"),
+                    "media_type": c.get("media_type", "movie"),
+                    "confidence": c.get("confidence", 0.5),
+                    "relevance_reason": c.get("relevance_reason", ""),
+                })
+        if new_candidates:
+            candidates = new_candidates
+    else:
+        logger.warning("AI narrowing failed, using existing candidates")
+
+    # Update session
+    session["candidates"] = candidates
+    session["narrowing_round"] = narrowing_round
+
+    candidate_count = len(candidates)
+    logger.info(
+        "After narrowing round %d: %d candidates remain",
+        narrowing_round, candidate_count,
+    )
+
+    # Verification: flag if candidate count exceeds 100
+    if candidate_count > 100:
+        logger.warning(
+            "VERIFICATION WARNING: Candidate count %d exceeds 100 after narrowing round %d",
+            candidate_count, narrowing_round,
+        )
+
+    # Check if more narrowing needed
+    if (
+        narrowing_round < MAX_NARROWING_ROUNDS
+        and candidate_count > TARGET_CANDIDATES
+        and narrow_result
+        and narrow_result.get("narrowing_question")
+    ):
+        question = ClarifyingQuestion(
+            question=narrow_result["narrowing_question"],
+            options=narrow_result.get("narrowing_options", []),
+            field=narrow_result.get("narrowing_field", "general"),
+        )
+        session["asked_questions"].append(question.question)
+        return DiscoverResponse(
+            session_id=session_id,
+            status="asking",
+            question=question,
+        )
+
+    # Resolve and return final results
+    resolved = await _resolve_via_tmdb(
+        db, candidates, watched_ids, disliked_ids,
+        include_watched, language_prefs, media_type,
+    )
+    final = await _assemble_final(
+        db, resolved, query, genres, media_type, user_id,
+        watched_ids, disliked_ids, language_prefs,
+    )
+    await _enrich_collections(final)
+
+    # Store all resolved results (excluding special picks) for "load more"
+    final_ids = {r.tmdb_id for r in final}
+    remaining = [r for r in resolved if r.tmdb_id not in final_ids]
+    session["all_remaining"] = [r.model_dump() for r in remaining]
+    session["more_offset"] = 0
+
+    has_more = len(remaining) > 0
+    return DiscoverResponse(session_id=session_id, status="results", results=final, has_more=has_more)

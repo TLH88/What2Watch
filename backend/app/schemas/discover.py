@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from pydantic import BaseModel
 
 
@@ -5,6 +7,7 @@ class DiscoverStartRequest(BaseModel):
     query: str
     media_type: str | None = None  # movie | tv | None (both)
     genres: list[str] = []
+    include_watched: bool = True
 
 
 class DiscoverRespondRequest(BaseModel):
@@ -17,22 +20,42 @@ class DiscoverFeedbackRequest(BaseModel):
     feedback: str  # thumbs_up | thumbs_down | save | watched | not_interested
 
 
-class ParsedQuery(BaseModel):
-    media_type: str | None = None
-    genres: list[str] = []
-    mood: str | None = None
-    era: str | None = None
-    runtime_pref: str | None = None  # short | medium | long
-    quality_pref: str | None = None  # high | any
-    hidden_gem: bool = False
-    keywords: list[str] = []
-    raw_query: str = ""
-
-
 class ClarifyingQuestion(BaseModel):
     question: str
     options: list[str] = []
-    field: str  # which ParsedQuery field this refines
+    field: str  # narrowing category (tone, era, subgenre, setting, style, format)
+
+
+class AICandidate(BaseModel):
+    """A candidate returned by the AI before TMDB resolution."""
+    title: str
+    year: int | None = None
+    media_type: str = "movie"  # movie | tv
+    confidence: float = 0.0
+    relevance_reason: str = ""
+
+
+class IntentResult(BaseModel):
+    """Result of the AI intent detection + candidate generation call."""
+    intent: str  # KNOWN_TITLE | TITLE_RECALL | RECOMMENDATION | SURPRISE_ME
+    confidence: float = 0.0
+    candidates: list[AICandidate] = []
+    extracted_filters: dict = {}
+    question: ClarifyingQuestion | None = None
+
+
+class CollectionPart(BaseModel):
+    tmdb_id: int
+    title: str
+    year: str | None = None
+    poster_path: str | None = None
+    overview: str | None = None
+
+
+class CollectionInfo(BaseModel):
+    collection_id: int
+    name: str
+    parts: list[CollectionPart] = []
 
 
 class RecommendationResult(BaseModel):
@@ -48,9 +71,16 @@ class RecommendationResult(BaseModel):
     genres: list[str] = []
     explanation: str = ""
     score: float = 0.0
+    confidence: float = 0.0
     is_hidden_gem: bool = False
+    is_curveball: bool = False
     locally_available: bool = False
     trailer_key: str | None = None
+    collection: CollectionInfo | None = None
+
+
+class DiscoverMoreRequest(BaseModel):
+    session_id: str
 
 
 class DiscoverResponse(BaseModel):
@@ -58,3 +88,4 @@ class DiscoverResponse(BaseModel):
     status: str  # asking | results
     question: ClarifyingQuestion | None = None
     results: list[RecommendationResult] = []
+    has_more: bool = False
