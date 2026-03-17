@@ -115,39 +115,29 @@ Step-by-step setup instructions for all of these are in `docs/setup-guide.md`.
 
 ## Screenshots
 
-### User Selection
+<p align="center">
+  <img src="docs/screenshots/0.%20What2Watch_Home.png" width="30%" alt="User selection screen" />
+  <img src="docs/screenshots/1.%20What2Watch_Main.png" width="30%" alt="Home screen top section" />
+  <img src="docs/screenshots/2.%20What2Watch_MainLower.png" width="30%" alt="Home screen lower section" />
+</p>
 
-![User selection screen](docs/screenshots/0.%20What2Watch_Home.png)
+<p align="center">
+  <img src="docs/screenshots/3.%20What2Watch_MainBottom.jpg" width="30%" alt="Home screen bottom section" />
+  <img src="docs/screenshots/4.%20What2Watch_MovieSearch.jpg" width="30%" alt="Movie search screen" />
+  <img src="docs/screenshots/5.%20What2Watch_MovieRecommendations.jpg" width="30%" alt="Recommendation results" />
+</p>
 
-Shared household profile selection with quick user switching and lightweight onboarding.
+<p align="center">
+  <img src="docs/screenshots/6.%20What2Watch_HiddenGem-Curveball.jpg" width="30%" alt="Hidden gem and curveball results" />
+</p>
 
-### Home Screen
-
-![Home screen top section](docs/screenshots/1.%20What2Watch_Main.png)
-
-Featured discovery entry points for movies, TV series, and group watch flows.
-
-![Home screen lower section](docs/screenshots/2.%20What2Watch_MainLower.png)
-
-Additional home actions for TV browsing and shared group-watch recommendations.
-
-![Home screen bottom section](docs/screenshots/3.%20What2Watch_MainBottom.jpg)
-
-Direct entry into title recall, watchlist access, and recent activity.
-
-### Discovery Flow
-
-![Movie search screen](docs/screenshots/4.%20What2Watch_MovieSearch.jpg)
-
-Free-text movie search with genre chips, voice input, and watched-content filtering.
-
-![Recommendation results](docs/screenshots/5.%20What2Watch_MovieRecommendations.jpg)
-
-Ranked recommendations with explanations, feedback actions, save/watch controls, and trailer access.
-
-![Hidden gem and curveball results](docs/screenshots/6.%20What2Watch_HiddenGem-Curveball.jpg)
-
-Collection-aware results that can surface hidden gems and curveball picks alongside standard recommendations.
+- User selection screen for shared household profiles
+- Home screen with featured discovery entry points
+- Home screen continuation with TV and group-watch actions
+- Home screen bottom section with title recall, watchlist, and recent activity
+- Search flow with free-text input, genre chips, and voice entry
+- Ranked recommendation results with explanations, feedback actions, save/watch controls, and trailer access
+- Collection-aware results showing hidden gem and curveball recommendations
 
 ## Environment Variables
 
