@@ -67,7 +67,6 @@ export default function Home({ onNavigate }: HomeProps) {
   const [recentSearches, setRecentSearches] = useState<RecentSearch[]>([])
   const [showRecent, setShowRecent] = useState(false)
   const [ratedItems, setRatedItems] = useState<RatedInfo[]>([])
-  const [activeCard, setActiveCard] = useState(0)
   const toast = useToast()
 
   useEffect(() => {
@@ -163,7 +162,7 @@ export default function Home({ onNavigate }: HomeProps) {
 
         {/* Featured Cards */}
         <div className="space-y-4">
-          {actions.map((action, i) => (
+          {actions.map((action) => (
             <button
               key={action.label}
               onClick={() => onNavigate(action.page, { type: action.type })}

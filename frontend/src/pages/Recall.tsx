@@ -132,7 +132,7 @@ export default function Recall({ initialQuery, onBack }: RecallProps) {
     }
   }
 
-  const handleCollectionView = async (tmdbId: number, title: string) => {
+  const handleCollectionView = async (_tmdbId: number, title: string) => {
     if (!currentUser) return
     setLoading(true)
     setResults([])

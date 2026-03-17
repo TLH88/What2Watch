@@ -158,7 +158,7 @@ export default function Discover({ initialType, initialQuery, initialGenres, onB
     }
   }
 
-  const handleCollectionView = async (tmdbId: number, title: string) => {
+  const handleCollectionView = async (_tmdbId: number, title: string) => {
     if (!currentUser) return
     setLoading(true)
     setResults([])

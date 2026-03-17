@@ -24,7 +24,7 @@ interface ResultCardProps {
 
 export default function ResultCard({
   tmdb_id, title, year, media_type, overview, poster_path,
-  vote_average, content_rating, runtime, genres, explanation, score,
+  vote_average, content_rating, runtime, genres, explanation,
   confidence, is_hidden_gem, is_curveball, locally_available, trailer_key, onFeedback,
   feedbackGiven,
 }: ResultCardProps) {

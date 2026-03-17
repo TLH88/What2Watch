@@ -1,6 +1,7 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react'
+import { createContext, useContext, useState, useEffect } from 'react'
 import { api } from '../api/client'
 import type { User } from '../api/client'
+import type { ReactNode } from 'react'
 
 interface UserContextType {
   users: User[]

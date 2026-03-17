@@ -7,6 +7,8 @@ venv/
 
 # Environment
 .env
+.env.*
+!.env.example
 .env.local
 .env.production
 infra/env/*.env
@@ -31,10 +33,12 @@ docker-compose.override.yml
 
 # Logs
 logs/*.log
+logs/
 
 # Backups
 backups/*.sql
 backups/*.gz
+backups/
 
 # Claude
 .claude/

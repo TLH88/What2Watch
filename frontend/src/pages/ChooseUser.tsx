@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { useUser } from '../context/UserContext'
 import { api } from '../api/client'
-import type { User } from '../api/client'
 
 const AVATAR_COLORS = [
   'from-amber-500 to-orange-600',
