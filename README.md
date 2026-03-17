@@ -2,8 +2,6 @@
 
 What2Watch is a self-hosted movie and TV recommendation app for households. It combines TMDB metadata, optional Trakt history, optional Jellyfin library matching, and an AI provider to help users discover something to watch or recall a title from vague clues.
 
-This repository is the sanitized public version. It does not include personal credentials, local certificates, runtime logs, database backups, or private environment files.
-
 ## Intended Use
 
 This project is designed for self-hosted use on a trusted local network or private server. It is not production-hardened for direct public internet exposure.
