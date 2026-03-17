@@ -4,7 +4,7 @@ What2Watch is a self-hosted movie and TV recommendation app for households. It c
 
 ## Intended Use
 
-This project is designed for self-hosted use on a trusted local network or private server. It is not production-hardened for direct public internet exposure.
+This project is designed for self-hosted use on a trusted local network or private server. It is not production-hardened for direct public internet exposure. You could easily host it on Vercel or similar and have access to it anytime without the local network connection requirement. 
 
 ## Stack
 
