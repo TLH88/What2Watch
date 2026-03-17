@@ -42,7 +42,7 @@ or on macOS/Linux:
 cp .env.example .env
 ```
 
-Then update `.env` with your own values.
+Then update `.env` with your own values. (This can be done within the app if you want a UI for input)
 
 Required for the core app:
 
@@ -52,7 +52,7 @@ Required for the core app:
 Required if you want AI-powered recommendations:
 
 - `AI_PROVIDER`
-- The matching provider key for that provider
+- The matching provider key for that provider (this can be chagned at any time, suggest using an older model for cost savings)
 
 Optional integrations:
 
