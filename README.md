@@ -2,9 +2,21 @@
 
 What2Watch is a self-hosted movie and TV recommendation app for households. It combines TMDB metadata, optional Trakt history, optional Jellyfin library matching, and an AI provider to help users discover something to watch or recall a title from vague clues.
 
+This repository is source-available under the PolyForm Noncommercial 1.0.0 license.
+
 ## Intended Use
 
 This project is designed for self-hosted use on a trusted local network or private server. It is not production-hardened for direct public internet exposure. You could easily host it on Vercel or similar and have access to it anytime without the local network connection requirement. 
+
+## License
+
+This project is licensed under PolyForm Noncommercial 1.0.0.
+
+You may use, study, and modify this project for personal and other noncommercial purposes.
+
+Commercial use, monetization, resale, paid hosting, bundling into paid products, or other revenue-generating use is not permitted without prior written approval from the developer.
+
+See `LICENSE` for the exact terms.
 
 ## Stack
 
