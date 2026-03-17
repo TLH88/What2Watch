@@ -115,25 +115,7 @@ Step-by-step setup instructions for all of these are in `docs/setup-guide.md`.
 
 ## Screenshots
 
-Recommended screenshot filenames for the public repo:
-
-- `docs/screenshots/choose-user.png`
-- `docs/screenshots/home-main-top.png`
-- `docs/screenshots/home-main-lower.png`
-- `docs/screenshots/discover-search.png`
-- `docs/screenshots/discover-results-primary.png`
-- `docs/screenshots/discover-results-collection.png`
-
-Suggested captions:
-
-- User selection screen for shared household profiles
-- Home screen with featured discovery entry points
-- Home screen continuation with TV and group-watch actions
-- Search flow with free-text input, genre chips, and voice entry
-- Ranked recommendation results with explanations, feedback actions, and trailer links
-- Collection-aware results showing hidden gem and curveball suggestions
-
-The current public screenshot set may use placeholder profile names such as `Tom` and `Sam`, but should avoid any real personal or household-specific data.
+Screenshots will be added here in a follow-up commit once the final image assets are included in `docs/screenshots/`.
 
 ## Environment Variables
 
