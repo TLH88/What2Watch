@@ -103,10 +103,9 @@ What2Watch can run with TMDB only, but the full feature set depends on four exte
   - required
   - used for core movie and TV metadata
 - AI provider
-  - optional
   - used for AI-assisted discovery and title recall
 - Trakt
-  - optional
+  - optional (highly recommended for full functionality)
   - used for importing ratings and watch history
 - Jellyfin
   - optional
