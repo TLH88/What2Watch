@@ -21,7 +21,7 @@ This project is designed for self-hosted use on a trusted local network or priva
 
 - Docker Desktop with Docker Compose enabled
 - A TMDB API key
-- Optional: Trakt client ID and secret
+- Optional (highly recommended): Trakt client ID and secret
 - Optional: Jellyfin base URL and API key
 - Optional: an API key for OpenAI, Anthropic, or Google AI
 
